@@ -7,18 +7,21 @@
 
 import SwiftUI
 
+@MainActor
 struct ContentView: View {
-    var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
-    }
-}
+    @ObservedObject var modeManager: AppModeManager
 
-#Preview {
-    ContentView()
+    var body: some View {
+        Group {
+            switch modeManager.mode {
+            case .controller:
+                ControllerView()
+            case .node:
+                NodeView()
+            }
+        }
+        .onChange(of: modeManager.mode) { _, newMode in
+            print("[WallSync] 已切换至: \(newMode.rawValue)")
+        }
+    }
 }
