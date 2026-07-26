@@ -10,6 +10,7 @@ struct WallLayoutConfig: Codable, Identifiable, Equatable, Hashable {
 
     var totalNodes: Int { columns * rows }
 
+    static let preset3x1 = WallLayoutConfig(columns: 3, rows: 1)
     static let preset5x2 = WallLayoutConfig(columns: 5, rows: 2)
     static let preset3x3 = WallLayoutConfig(columns: 3, rows: 3)
     static let preset4x2 = WallLayoutConfig(columns: 4, rows: 2)
@@ -17,7 +18,7 @@ struct WallLayoutConfig: Codable, Identifiable, Equatable, Hashable {
     static let preset6x2 = WallLayoutConfig(columns: 6, rows: 2)
 
     static var allPresets: [WallLayoutConfig] {
-        [.preset2x2, .preset3x3, .preset4x2, .preset5x2, .preset6x2]
+        [.preset3x1, .preset2x2, .preset3x3, .preset4x2, .preset5x2, .preset6x2]
     }
 }
 

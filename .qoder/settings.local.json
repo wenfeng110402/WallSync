@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la \"/Users/cret/Desktop/advx/WallSync/WallSync\" && ls \"/Users/cret/Desktop/advx/WallSync\")",
+      "Read(//Users/cret/Desktop/advx/WallSync/**)"
+    ]
+  }
+}

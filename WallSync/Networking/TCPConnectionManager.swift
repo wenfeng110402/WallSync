@@ -25,6 +25,8 @@ final class TCPServerManager: ObservableObject {
     @Published private(set) var serverState: TCPConnectionState = .disconnected
     /// 服务器就绪后回调，传入真实端口号
     var onReady: ((UInt16) -> Void)?
+    /// 服务器启动失败回调（如端口被占用）
+    var onFailed: ((Error) -> Void)?
 
     private var listener: NWListener?
     private var backgroundQueue = DispatchQueue(label: "com.wallsync.tcp.server", qos: .userInitiated)
@@ -70,6 +72,7 @@ final class TCPServerManager: ObservableObject {
                     }
                 case .failed(let error):
                     self?.serverState = .failed(error)
+                    self?.onFailed?(error)
                 case .cancelled:
                     self?.serverState = .disconnected
                 default:

@@ -13,6 +13,9 @@ struct NodeView: View {
     @State private var nodeID: String = "node_\(Int.random(in: 1000...9999))"
     @State private var controllerHost: String = ""
     @State private var controllerPort: UInt16 = 0
+    @State private var autoConnect: Bool = true
+    @State private var showPeersSheet: Bool = false
+    @State private var peerPortOverrides: [String: String] = [:]
     @State private var isConnecting = false
     @State private var currentRegion: RegionAssignment?
     @State private var isFullScreen = false
@@ -51,9 +54,17 @@ struct NodeView: View {
             client.delegate = self
             discovery.onControllerFound = { host, port in
                 guard !hasConnectedToController else { return }
-                hasConnectedToController = true
-                print("[Node] 发现主控: \(host):\(port)")
-                connectToController(host: host, port: port)
+                DispatchQueue.main.async {
+                    controllerHost = host
+                    controllerPort = port
+                    if autoConnect {
+                        hasConnectedToController = true
+                        print("[Node] 自动连接主控: \(host):\(port)")
+                        connectToController(host: host, port: port)
+                    } else {
+                        discoveryLog.append("发现主控 \(host):\(port)（自动连接已关闭）")
+                    }
+                }
             }
             print("[Node] 正在搜索设备...")
             discovery.start()
@@ -67,6 +78,63 @@ struct NodeView: View {
         }
         .onReceive(udpSync.$lastSyncSignal) { signal in
             processSyncSignal(signal)
+        }
+        .sheet(isPresented: $showPeersSheet) {
+            NavigationView {
+                List {
+                    ForEach(discovery.peers) { peer in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text(peer.deviceName)
+                                    .font(.headline)
+                                Spacer()
+                                Text(peer.isController ? "主控" : "节点")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading) {
+                                    Text("Host: \(peer.hostName ?? "-")")
+                                        .font(.caption2)
+                                    Text("IP: \(peer.ipAddress ?? "-")")
+                                        .font(.caption2)
+                                }
+
+                                Spacer()
+
+                                VStack(alignment: .trailing) {
+                                    HStack {
+                                        Text("端口:")
+                                            .font(.caption2)
+                                        let defaultPort = peer.tcpPort > 0 ? String(peer.tcpPort) : (peer.port > 0 ? String(peer.port) : "")
+                                        TextField("port", text: Binding(
+                                            get: { peerPortOverrides[peer.id] ?? defaultPort },
+                                            set: { peerPortOverrides[peer.id] = $0 }
+                                        ))
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(width: 100)
+                                    }
+
+                                    Button("连接") {
+                                        connectToPeer(peer)
+                                        showPeersSheet = false
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 6)
+                    }
+                }
+                .navigationTitle("发现的设备")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("关闭") { showPeersSheet = false }
+                    }
+                }
+            }
         }
     }
 
@@ -216,6 +284,11 @@ struct NodeView: View {
                 Text("已发现 \(discovery.peers.count) 台设备")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                Button("管理设备") {
+                    showPeersSheet = true
+                }
+                .font(.caption2)
+                .padding(.leading, 6)
 
                 if controllerPort > 0 {
                     Text("· 主控 \(controllerHost):\(controllerPort)")
@@ -234,6 +307,14 @@ struct NodeView: View {
                         .font(.caption2)
                         .foregroundStyle(.green)
                 }
+
+                // 自动连接开关
+                Toggle(isOn: $autoConnect) {
+                    Text("自动连接")
+                        .font(.caption2)
+                }
+                .toggleStyle(.switch)
+                .frame(width: 120)
 
                 Spacer()
 
@@ -257,6 +338,31 @@ struct NodeView: View {
         discoveryLog.append("连接主控 \(host):\(port)...")
 
         client.connect(to: host, port: port, nodeID: nodeID)
+    }
+
+    // 手动连接某个 peer，支持端口覆盖字符串
+    private func connectToPeer(_ peer: WallSyncPeer) {
+        guard let host = peer.ipAddress ?? peer.hostName else {
+            connectionError = "无法解析主控地址"
+            return
+        }
+
+        // 优先使用覆盖端口
+        let override = peerPortOverrides[peer.id]
+        let portToUse: UInt16
+        if let ov = override, let p = UInt16(ov) {
+            portToUse = p
+        } else if peer.tcpPort > 0 {
+            portToUse = peer.tcpPort
+        } else if peer.port > 0 {
+            portToUse = UInt16(peer.port)
+        } else {
+            connectionError = "未提供端口"
+            return
+        }
+
+        hasConnectedToController = true
+        connectToController(host: host, port: portToUse)
     }
 
     // MARK: - 同步信号处理

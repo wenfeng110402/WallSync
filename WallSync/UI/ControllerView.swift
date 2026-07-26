@@ -10,12 +10,17 @@ struct ControllerView: View {
     @StateObject private var videoEngine = VideoEngine()
     @StateObject private var renderer = MetalRenderer()
 
-    @State private var selectedLayout: WallLayoutConfig = .preset5x2
+    @State private var selectedLayout: WallLayoutConfig = .preset3x1
     @State private var isPlaying = false
     @State private var isPaused = false
     @State private var selectedVideoURL: URL?
     @State private var showFilePicker = false
     @State private var isShowingNodeRegions = true
+    @State private var customPortText: String = ""
+    @State private var portNotice: String?
+    @State private var nodeOrder: [String] = []
+
+    private static let customPortKey = "WallSync.customTCPPort"
 
     var body: some View {
         NavigationSplitView {
@@ -41,11 +46,9 @@ struct ControllerView: View {
                 discovery.advertiseAsController(true, port: port)
                 discovery.start()
             }
-            do {
-                try server.start()
-            } catch {
-                print("[Controller] TCP 服务启动失败: \(error)")
-            }
+            let savedPort = UInt16(exactly: UserDefaults.standard.integer(forKey: Self.customPortKey)) ?? 0
+            customPortText = savedPort > 0 ? String(savedPort) : ""
+            startServer(port: savedPort)
         }
         .onDisappear {
             discovery.stop()
@@ -292,6 +295,9 @@ struct ControllerView: View {
                     // 布局设置
                     layoutSection
 
+                    // 网络设置
+                    networkSection
+
                     // 播放控制
                     playbackSection
 
@@ -368,11 +374,83 @@ struct ControllerView: View {
                         .font(.caption)
                     }
                 }
+
+                // 节点排序：序号 1 对应左上角，按行优先排列
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("显示器顺序（1 = 左上）")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    ForEach(Array(orderedNodeIDs.enumerated()), id: \.element) { index, nodeID in
+                        HStack(spacing: 6) {
+                            Text("#\(index + 1)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.blue)
+                                .frame(width: 24, alignment: .leading)
+
+                            Text(nodeID)
+                                .font(.caption)
+                                .lineLimit(1)
+
+                            Spacer()
+
+                            Button {
+                                moveNode(at: index, offset: -1)
+                            } label: {
+                                Image(systemName: "chevron.up")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(index == 0)
+
+                            Button {
+                                moveNode(at: index, offset: 1)
+                            } label: {
+                                Image(systemName: "chevron.down")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(index == orderedNodeIDs.count - 1)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
             }
 
             Toggle(isOn: $isShowingNodeRegions) {
                 Text("显示节点区域划分")
                     .font(.caption)
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var networkSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("网络设置", systemImage: "network")
+
+            HStack {
+                Text("TCP 端口:")
+                    .font(.caption)
+                TextField("自动", text: $customPortText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 80)
+                    .onSubmit { applyCustomPort() }
+                Button("应用") {
+                    applyCustomPort()
+                }
+                .buttonStyle(.bordered)
+                .font(.caption)
+            }
+
+            Text("当前端口: \(server.port.map(String.init) ?? "未启动") · 留空为自动分配")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            if let notice = portNotice {
+                Text(notice)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
             }
         }
         .padding(12)
@@ -503,6 +581,49 @@ struct ControllerView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
+    // MARK: - 服务器启动
+
+    /// 启动 TCP 服务器；自定义端口失败时回退到系统自动分配
+    private func startServer(port: UInt16) {
+        server.onFailed = { [self] error in
+            guard port > 0 else { return }
+            print("[Controller] 端口 \(port) 启动失败: \(error)，回退自动分配")
+            portNotice = "端口 \(port) 不可用，已回退自动分配"
+            server.stop()
+            startServer(port: 0)
+        }
+
+        do {
+            try server.start(port: port)
+            if port > 0 { portNotice = nil }
+        } catch {
+            print("[Controller] TCP 服务启动失败: \(error)")
+            if port > 0 {
+                portNotice = "端口 \(port) 不可用，已回退自动分配"
+                startServer(port: 0)
+            }
+        }
+    }
+
+    private func applyCustomPort() {
+        let trimmed = customPortText.trimmingCharacters(in: .whitespaces)
+        let port: UInt16
+        if trimmed.isEmpty {
+            port = 0
+        } else if let p = UInt16(trimmed), p > 0 {
+            port = p
+        } else {
+            portNotice = "无效端口（1-65535，留空为自动）"
+            return
+        }
+
+        UserDefaults.standard.set(Int(port), forKey: Self.customPortKey)
+        portNotice = nil
+        discovery.stop()
+        server.stop()
+        startServer(port: port)
+    }
+
     // MARK: - 播放控制方法
 
     private func loadVideo(url: URL) {
@@ -560,13 +681,30 @@ struct ControllerView: View {
         server.broadcast(msg)
     }
 
+    /// 按用户排序返回已连接节点，未手动排过序的按 ID 排在末尾
+    private var orderedNodeIDs: [String] {
+        let connected = Set(server.connections.keys)
+        var result = nodeOrder.filter { connected.contains($0) }
+        let remaining = connected.subtracting(result).sorted()
+        result.append(contentsOf: remaining)
+        return result
+    }
+
+    private func moveNode(at index: Int, offset: Int) {
+        var order = orderedNodeIDs
+        let target = index + offset
+        guard order.indices.contains(index), order.indices.contains(target) else { return }
+        order.swapAt(index, target)
+        nodeOrder = order
+    }
+
     private func applyLayout() {
         let cols = selectedLayout.columns
         let videoW = max(Int(videoEngine.naturalSize.width), 1920)
         let videoH = max(Int(videoEngine.naturalSize.height), 1080)
         let cellW = videoW / cols
 
-        let nodeIDs = Array(server.connections.keys).sorted()
+        let nodeIDs = orderedNodeIDs
 
         for (index, nodeID) in nodeIDs.prefix(selectedLayout.totalNodes).enumerated() {
             let assignment = RegionAssignment(
